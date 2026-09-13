@@ -12,7 +12,7 @@ servers miss: service container bindings and Eloquent model attribute accessors.
 
 ## Tech stack
 
-- **Language**: Go 1.23+
+- **Language**: Go 1.27.1+
 - **PHP parser**: `github.com/tree-sitter/tree-sitter-php` v0.24.2 via
   `github.com/tree-sitter/go-tree-sitter` v0.25.0 (CGo). Supports PHP 5–8.x
   including PHP 8.4 property hooks and asymmetric visibility.

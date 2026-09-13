@@ -58,7 +58,7 @@ Jump from `$user->email_address` to the accessor declaration.
 
 ## Requirements
 
-- Go 1.23+ with CGo enabled (required by the tree-sitter PHP grammar)
+- Go 1.27.1+ with CGo enabled (required by the tree-sitter PHP grammar)
 - PHP 8.1+ project (Laravel 10+); PHP 8.4 and 8.5 are fully supported
 
 ## Installation
