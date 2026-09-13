@@ -1,6 +1,6 @@
 # Binary
-laravel-lsp
-laravel-lsp.exe
+/laravel-lsp
+/laravel-lsp.exe
 
 # Build output
 dist/
