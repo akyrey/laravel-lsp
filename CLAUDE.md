@@ -19,6 +19,12 @@ servers miss: service container bindings and Eloquent model attribute accessors.
 - **LSP framework**: `github.com/tliron/glsp` v0.2.2, protocol 3.16, stdio transport
 - **Build**: `make build` (outputs `./laravel-lsp`) or `go build -o laravel-lsp ./cmd/laravel-lsp`
 - **Tests**: `make test` / `go test ./...`
+- **Versioning**: `make build` stamps `main.version` via `-ldflags` from
+  `git describe`. `go install <module>@<tag>` cannot receive ldflags, so
+  `resolveVersion()` in `cmd/laravel-lsp/main.go` falls back to the module
+  version recorded in the build info. Pushing a `v*` tag triggers
+  `.github/workflows/release.yml`, which builds native binaries per platform
+  (CGo rules out cross-compiling the tree-sitter grammar) and publishes them.
 
 ## Commands
 
