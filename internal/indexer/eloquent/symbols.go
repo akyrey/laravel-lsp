@@ -7,6 +7,10 @@ const modelBaseFQN phputil.FQN = "Illuminate\\Database\\Eloquent\\Model"
 // eloquentAttributeTypeFQN is the return type of modern accessor methods.
 const eloquentAttributeTypeFQN phputil.FQN = "Illuminate\\Database\\Eloquent\\Casts\\Attribute"
 
+// scopeAttributeFQN marks a query scope declared without the "scope" prefix
+// (Laravel 12+).
+const scopeAttributeFQN phputil.FQN = "Illuminate\\Database\\Eloquent\\Attributes\\Scope"
+
 // eloquentRelationsPrefix is the namespace for all built-in Eloquent relation classes.
 const eloquentRelationsPrefix = "Illuminate\\Database\\Eloquent\\Relations\\"
 

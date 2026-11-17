@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -125,6 +126,7 @@ func printText(modelIdx *eloquent.ModelIndex, bindingIdx *container.BindingIndex
 					fmt.Printf("  %-30s %s\n", name, attrKindLabel(a))
 				}
 			}
+			printScopes(modelIdx, cat)
 		}
 	}
 
@@ -151,6 +153,24 @@ func printText(modelIdx *eloquent.ModelIndex, bindingIdx *container.BindingIndex
 				fmt.Printf("  target: %s:%d\n", b.Location.Path, b.Location.StartLine)
 			}
 		}
+	}
+}
+
+// printScopes lists the query scopes callable on cat's model, including those
+// inherited from traits and parent models, with their declaring file:line.
+func printScopes(modelIdx *eloquent.ModelIndex, cat *eloquent.ModelCatalog) {
+	merged := modelIdx.Lookup(cat.Class)
+	if merged == nil || len(merged.Scopes) == 0 {
+		return
+	}
+	names := make([]string, 0, len(merged.Scopes))
+	for name := range merged.Scopes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		loc := merged.Scopes[name]
+		fmt.Printf("  %-30s scope     %s:%d\n", name, filepath.Base(loc.Path), loc.StartLine)
 	}
 }
 

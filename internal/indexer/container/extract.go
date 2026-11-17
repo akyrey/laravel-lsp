@@ -159,58 +159,31 @@ func (v *bindingCallVisitor) recordCallBinding(args []*ts.Node, src []byte, life
 // from a class_declaration or interface_declaration node and returns any
 // Binding entries they produce.
 func extractAttrBindings(raw *ts.Node, src []byte, abstract phputil.FQN, fc *phputil.FileContext, path string) []Binding {
-	attrListNode := raw.ChildByFieldName("attributes")
-	if attrListNode == nil {
-		return nil
-	}
 	var out []Binding
-	for i := uint(0); i < attrListNode.ChildCount(); i++ {
-		attrGroup := attrListNode.Child(i)
-		if attrGroup.Kind() != "attribute_group" {
+	for _, attr := range phpwalk.Attributes(raw, src) {
+		lifetime, ok := bindingAttributes[fc.Resolve(attr.Name)]
+		if !ok {
 			continue
 		}
-		for j := uint(0); j < attrGroup.ChildCount(); j++ {
-			attr := attrGroup.Child(j)
-			if attr.Kind() != "attribute" {
-				continue
-			}
-			// First name-like child is the attribute class.
-			var attrNameText string
-			for k := uint(0); k < attr.ChildCount(); k++ {
-				child := attr.Child(k)
-				if child.Kind() == "qualified_name" || child.Kind() == "name" {
-					attrNameText = phpnode.NodeText(child, src)
-					break
-				}
-			}
-			if attrNameText == "" {
-				continue
-			}
-			attrFQN := fc.Resolve(attrNameText)
-			lifetime, ok := bindingAttributes[attrFQN]
-			if !ok {
-				continue
-			}
-			argsNode := attr.ChildByFieldName("parameters")
-			if argsNode == nil {
-				continue
-			}
-			args := phpwalk.ArgExprs(argsNode, src)
-			if len(args) == 0 {
-				continue
-			}
-			concrete := phpwalk.ClassConstFQN(args[0], src, fc)
-			if concrete == "" {
-				continue
-			}
-			out = append(out, Binding{
-				Abstract: abstract,
-				Concrete: concrete,
-				Kind:     BindAttribute,
-				Lifetime: lifetime,
-				Source:   phpnode.FromNode(path, attr),
-			})
+		argsNode := attr.Node.ChildByFieldName("parameters")
+		if argsNode == nil {
+			continue
 		}
+		args := phpwalk.ArgExprs(argsNode, src)
+		if len(args) == 0 {
+			continue
+		}
+		concrete := phpwalk.ClassConstFQN(args[0], src, fc)
+		if concrete == "" {
+			continue
+		}
+		out = append(out, Binding{
+			Abstract: abstract,
+			Concrete: concrete,
+			Kind:     BindAttribute,
+			Lifetime: lifetime,
+			Source:   phpnode.FromNode(path, attr.Node),
+		})
 	}
 	return out
 }

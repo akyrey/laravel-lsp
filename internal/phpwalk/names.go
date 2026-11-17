@@ -77,3 +77,51 @@ func StringValue(n *ts.Node, src []byte) string {
 	}
 	return v
 }
+
+// AttributeRef is one PHP 8 attribute attached to a declaration.
+type AttributeRef struct {
+	// Name is the attribute class as written in source ("Scope",
+	// "\Illuminate\...\Scope"); resolve it with FileContext.Resolve.
+	Name string
+	// Node is the `attribute` node; its "parameters" field holds the arguments.
+	Node *ts.Node
+}
+
+// Attributes returns the attributes attached to decl (a class, interface,
+// method, property, ... declaration) in source order, flattening grouped
+// (#[A, B]) and stacked (#[A] #[B]) forms.
+func Attributes(decl *ts.Node, src []byte) []AttributeRef {
+	list := decl.ChildByFieldName("attributes")
+	if list == nil {
+		return nil
+	}
+	var out []AttributeRef
+	for i := uint(0); i < list.ChildCount(); i++ {
+		group := list.Child(i)
+		if group.Kind() != "attribute_group" {
+			continue
+		}
+		for j := uint(0); j < group.ChildCount(); j++ {
+			attr := group.Child(j)
+			if attr.Kind() != "attribute" {
+				continue
+			}
+			if name := attributeName(attr, src); name != "" {
+				out = append(out, AttributeRef{Name: name, Node: attr})
+			}
+		}
+	}
+	return out
+}
+
+// attributeName returns the class name of an attribute node: its first
+// name-like child.
+func attributeName(attr *ts.Node, src []byte) string {
+	for k := uint(0); k < attr.ChildCount(); k++ {
+		child := attr.Child(k)
+		if child.Kind() == "qualified_name" || child.Kind() == "name" {
+			return child.Utf8Text(src)
+		}
+	}
+	return ""
+}

@@ -67,6 +67,9 @@ func extractMethods(path string, classNode *ts.Node, src []byte, fc *phputil.Fil
 			continue
 		}
 
+		// Query scopes jump to the method name, past any #[Scope] attribute.
+		scopeLoc := phpnode.FromNode(path, nameNode)
+
 		// Query scope: scopeActive() is called as Model::active().
 		if m2 := scopeMethodRe.FindStringSubmatch(methodName); m2 != nil {
 			rest := m2[1]
@@ -75,7 +78,20 @@ func extractMethods(path string, classNode *ts.Node, src []byte, fc *phputil.Fil
 				MethodName:  methodName,
 				Kind:        Scope,
 				Source:      SourceAST,
-				Location:    loc,
+				Location:    scopeLoc,
+			})
+			continue
+		}
+
+		// Laravel 12 attribute scope: #[Scope] popular() is called as
+		// Model::popular().
+		if hasScopeAttribute(m, src, fc) {
+			out = append(out, ModelAttribute{
+				ExposedName: methodName,
+				MethodName:  methodName,
+				Kind:        Scope,
+				Source:      SourceAST,
+				Location:    scopeLoc,
 			})
 			continue
 		}
@@ -149,6 +165,17 @@ func extractMethods(path string, classNode *ts.Node, src []byte, fc *phputil.Fil
 		}
 	}
 	return out
+}
+
+// hasScopeAttribute reports whether method carries Laravel's #[Scope]
+// attribute (Illuminate\Database\Eloquent\Attributes\Scope).
+func hasScopeAttribute(method *ts.Node, src []byte, fc *phputil.FileContext) bool {
+	for _, attr := range phpwalk.Attributes(method, src) {
+		if fc.Resolve(attr.Name) == scopeAttributeFQN {
+			return true
+		}
+	}
+	return false
 }
 
 // extractCastsMethod extracts CastArray attributes from a Laravel 11+
