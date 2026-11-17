@@ -126,15 +126,13 @@ func scanRenameRefs(
 
 type renameRefsVisitor struct {
 	phpwalk.NullVisitor
+	types        typeCache
 	fc           *phputil.FileContext
 	sym          *refSymbol
 	path         string
 	src          []byte
 	models       *eloquent.ModelIndex
 	newName      string
-	encClass     phputil.FQN
-	encMethod    *phpwalk.MethodInfo
-	assignedVars map[string]phputil.FQN
 	replacements []textReplacement
 }
 
@@ -143,25 +141,11 @@ func (v *renameRefsVisitor) VisitUseItem(alias, fqn string) {
 	v.fc.Uses[alias] = phputil.FQN(fqn)
 }
 
-func (v *renameRefsVisitor) VisitClass(n phpwalk.ClassInfo) {
-	v.encClass = v.fc.Resolve(n.NameText)
-	v.encMethod = nil
-}
-
-func (v *renameRefsVisitor) VisitClassMethod(n phpwalk.MethodInfo) {
-	v.encMethod = &n
-	v.assignedVars = collectAssignments(n, v.fc)
-}
-
 func (v *renameRefsVisitor) VisitPropertyFetch(n phpwalk.PropertyFetchInfo) {
 	if n.PropName != v.sym.propName {
 		return
 	}
-	var params []phpwalk.ParamInfo
-	if v.encMethod != nil {
-		params = v.encMethod.Params
-	}
-	modelFQN := resolveExprType(n.VarRaw, n.Src, v.encClass, params, v.assignedVars, v.fc, v.models)
+	modelFQN := v.types.resolve(n.VarRaw, n.Src, v.fc, v.models)
 	if modelFQN != v.sym.modelFQN {
 		return
 	}

@@ -68,7 +68,7 @@ func walkNode(path string, src []byte, n *ts.Node, v Visitor) {
 			v.VisitStaticCall(info)
 		}
 
-	case "member_call_expression":
+	case "member_call_expression", "nullsafe_member_call_expression":
 		if info, ok := buildMethodCallInfo(path, src, n); ok {
 			v.VisitMethodCall(info)
 		}
@@ -208,13 +208,7 @@ func buildClassInfo(path string, src []byte, n *ts.Node) ClassInfo {
 	if nameNode := n.ChildByFieldName("name"); nameNode != nil {
 		info.NameText = phpnode.NodeText(nameNode, src)
 	}
-	for i := uint(0); i < n.ChildCount(); i++ {
-		child := n.Child(i)
-		if child.Kind() == "base_clause" {
-			info.ExtendsText = baseClauseText(src, child)
-			break
-		}
-	}
+	info.ExtendsText = ExtendsName(n, src)
 	info.UsesTraits = collectUseTraits(src, n.ChildByFieldName("body"))
 	return info
 }
@@ -318,13 +312,36 @@ func unwrapTypeName(src []byte, n *ts.Node) string {
 		return qualifiedNameText(n, src)
 	case "name":
 		return phpnode.NodeText(n, src)
-	case "union_type", "intersection_type":
-		// e.g. `int|string` or `Countable&Iterator` — no single resolvable
-		// type, so callers must treat this as unknown rather than resolve
-		// the raw "A|B" text as if it were one class name.
+	case "union_type":
+		// `User|null` is just a nullable User; any other union (`int|string`,
+		// `A|B|null`) has no single resolvable type.
+		if only := soleNonNullMember(n, src); only != nil {
+			return unwrapTypeName(src, only)
+		}
+		return ""
+	case "intersection_type":
+		// e.g. `Countable&Iterator` — no single resolvable type, so callers
+		// must treat this as unknown rather than resolve "A&B" as one class.
 		return ""
 	}
 	return phpnode.NodeText(n, src)
+}
+
+// soleNonNullMember returns the only member of a union type that is not the
+// `null` type, or nil when there are zero or several such members.
+func soleNonNullMember(union *ts.Node, src []byte) *ts.Node {
+	var only *ts.Node
+	for i := uint(0); i < union.NamedChildCount(); i++ {
+		member := union.NamedChild(i)
+		if member.Kind() == "primitive_type" && phpnode.NodeText(member, src) == "null" {
+			continue
+		}
+		if only != nil {
+			return nil
+		}
+		only = member
+	}
+	return only
 }
 
 func extractParams(src []byte, paramsNode *ts.Node) []ParamInfo {

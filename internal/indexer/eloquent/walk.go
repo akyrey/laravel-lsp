@@ -31,6 +31,7 @@ func ReindexFile(path string, old *ModelIndex) (*ModelIndex, error) {
 		newIdx := NewModelIndex()
 		newIdx.syms = newSyms
 		newIdx.schema = old.schema
+		newIdx.members = old.members
 		carryOverExcept(newIdx, old, path)
 		return newIdx, nil
 	}
@@ -43,6 +44,7 @@ func ReindexFile(path string, old *ModelIndex) (*ModelIndex, error) {
 	newIdx := NewModelIndex()
 	newIdx.syms = newSyms
 	newIdx.schema = old.schema
+	newIdx.members = old.members
 	carryOverExcept(newIdx, old, path)
 	models, traits := extractFileModels(path, src, tree, newSyms)
 	for _, catalog := range models {

@@ -87,3 +87,28 @@ func TestAttributes(t *testing.T) {
 		})
 	}
 }
+
+func TestUnwrapTypeName_NullableUnion(t *testing.T) {
+	tests := []struct{ decl, want string }{
+		{`function f(User|null $u) {}`, "User"},
+		{`function f(null|\App\User $u) {}`, "\\App\\User"},
+		{`function f(int|string $u) {}`, ""},
+		{`function f(User|Admin|null $u) {}`, ""},
+		{`function f(?User $u) {}`, "User"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.decl, func(t *testing.T) {
+			src := []byte("<?php " + tc.decl)
+			tree, err := phpnode.ParseBytes(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tree.Close()
+			param := firstOfKind(tree.RootNode(), "simple_parameter")
+			got := phpwalk.UnwrapTypeName(param.ChildByFieldName("type"), src)
+			if got != tc.want {
+				t.Errorf("UnwrapTypeName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -481,3 +481,19 @@ $a = ['sq' => 'single', 'dq' => "double", 'interp' => "pre $var post"];`)
 		t.Errorf("interpolated value = %q, want empty (unknowable statically)", got["interp"])
 	}
 }
+
+func TestWalk_NullsafeMethodCall(t *testing.T) {
+	src := []byte(`<?php $post?->published();`)
+	tree, err := phpnode.ParseBytes(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.Close()
+
+	v := &collectingVisitor{}
+	phpwalk.Walk("", src, tree, v)
+
+	if len(v.methodCalls) != 1 || v.methodCalls[0].MethodName != "published" {
+		t.Fatalf("method calls = %+v, want one call to published", v.methodCalls)
+	}
+}

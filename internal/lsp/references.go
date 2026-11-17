@@ -105,15 +105,14 @@ func identifySymbolWithLoc(
 // symFinder identifies the symbol under the cursor.
 type symFinder struct {
 	phpwalk.NullVisitor
+	types    typeCache
 	src      []byte
 	fc       *phputil.FileContext
 	offset   int
 	bindings *container.BindingIndex
 	models   *eloquent.ModelIndex
 
-	encClass     phputil.FQN
-	encMethod    *phpwalk.MethodInfo
-	assignedVars map[string]phputil.FQN
+	encClass phputil.FQN
 
 	sym      *refSymbol
 	tokenLoc phputil.Location
@@ -135,9 +134,6 @@ func (v *symFinder) VisitClassMethod(n phpwalk.MethodInfo) {
 	if v.offset < n.StartByte || v.offset >= n.EndByte {
 		return
 	}
-	v.encMethod = &n
-	v.assignedVars = collectAssignments(n, v.fc)
-
 	// Cursor on the method name → find the exposed attribute name.
 	nameNode := n.Raw.ChildByFieldName("name")
 	if nameNode == nil || !cursorOnNode(v.offset, nameNode) {
@@ -189,11 +185,7 @@ func (v *symFinder) VisitPropertyFetch(n phpwalk.PropertyFetchInfo) {
 	if v.offset < n.PropLocation.StartByte || v.offset >= n.PropLocation.EndByte {
 		return
 	}
-	var params []phpwalk.ParamInfo
-	if v.encMethod != nil {
-		params = v.encMethod.Params
-	}
-	modelFQN := resolveExprType(n.VarRaw, n.Src, v.encClass, params, v.assignedVars, v.fc, v.models)
+	modelFQN := v.types.resolve(n.VarRaw, n.Src, v.fc, v.models)
 	if modelFQN == "" {
 		return
 	}
@@ -328,15 +320,13 @@ func declarationLocations(sym *refSymbol, bindings *container.BindingIndex, mode
 
 type refsVisitor struct {
 	phpwalk.NullVisitor
-	fc           *phputil.FileContext
-	sym          *refSymbol
-	path         string
-	src          []byte
-	models       *eloquent.ModelIndex
-	encClass     phputil.FQN
-	encMethod    *phpwalk.MethodInfo
-	assignedVars map[string]phputil.FQN
-	locations    []phputil.Location
+	types     typeCache
+	fc        *phputil.FileContext
+	sym       *refSymbol
+	path      string
+	src       []byte
+	models    *eloquent.ModelIndex
+	locations []phputil.Location
 }
 
 func (v *refsVisitor) VisitNamespace(ns string) { v.fc.Namespace = phputil.FQN(ns) }
@@ -344,25 +334,11 @@ func (v *refsVisitor) VisitUseItem(alias, fqn string) {
 	v.fc.Uses[alias] = phputil.FQN(fqn)
 }
 
-func (v *refsVisitor) VisitClass(n phpwalk.ClassInfo) {
-	v.encClass = v.fc.Resolve(n.NameText)
-	v.encMethod = nil
-}
-
-func (v *refsVisitor) VisitClassMethod(n phpwalk.MethodInfo) {
-	v.encMethod = &n
-	v.assignedVars = collectAssignments(n, v.fc)
-}
-
 func (v *refsVisitor) VisitPropertyFetch(n phpwalk.PropertyFetchInfo) {
 	if !v.sym.isEloquent() || n.PropName != v.sym.propName {
 		return
 	}
-	var params []phpwalk.ParamInfo
-	if v.encMethod != nil {
-		params = v.encMethod.Params
-	}
-	modelFQN := resolveExprType(n.VarRaw, n.Src, v.encClass, params, v.assignedVars, v.fc, v.models)
+	modelFQN := v.types.resolve(n.VarRaw, n.Src, v.fc, v.models)
 	if modelFQN != v.sym.modelFQN {
 		return
 	}

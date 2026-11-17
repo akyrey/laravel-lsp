@@ -52,6 +52,12 @@ const (
 	SourceMigration                        // a column from database/migrations; never renamed
 )
 
+// ClassMembers resolves the class type of a property on any class (not only
+// models). classinfo.Index implements it.
+type ClassMembers interface {
+	PropertyType(class phputil.FQN, prop string) phputil.FQN
+}
+
 // ColumnSource supplies the database columns of a table, keyed by column
 // name. migrations.Schema implements it.
 type ColumnSource interface {
@@ -119,10 +125,11 @@ func (c *ModelCatalog) Clone() *ModelCatalog {
 
 // ModelIndex is the full Eloquent symbol table for a project.
 type ModelIndex struct {
-	byFQN  map[phputil.FQN]*ModelCatalog
-	traits map[phputil.FQN]*ModelCatalog // trait FQN → its attribute catalog
-	syms   *symbolTable                  // retained for incremental per-file reindex
-	schema ColumnSource                  // nil = no migration columns
+	byFQN   map[phputil.FQN]*ModelCatalog
+	traits  map[phputil.FQN]*ModelCatalog // trait FQN → its attribute catalog
+	syms    *symbolTable                  // retained for incremental per-file reindex
+	schema  ColumnSource                  // nil = no migration columns
+	members ClassMembers                  // nil = no typed-property lookup
 
 	// merged memoizes inheritance/trait-merged catalog views per index
 	// generation (indexes are immutable once published, so views never go
@@ -293,14 +300,32 @@ func (idx *ModelIndex) WithSchema(schema ColumnSource) *ModelIndex {
 	return c
 }
 
+// WithClassMembers returns a new index that answers PropertyType through
+// members. Same sharing rules as WithSchema.
+func (idx *ModelIndex) WithClassMembers(members ClassMembers) *ModelIndex {
+	c := idx.shallowCopy()
+	c.members = members
+	return c
+}
+
+// PropertyType returns the class type of property prop on class, or "" when
+// unknown or no ClassMembers is attached.
+func (idx *ModelIndex) PropertyType(class phputil.FQN, prop string) phputil.FQN {
+	if idx == nil || idx.members == nil {
+		return ""
+	}
+	return idx.members.PropertyType(class, prop)
+}
+
 // shallowCopy shares the catalog maps and attachments but gets its own
 // merged-view memo, since attachments change what Lookup returns.
 func (idx *ModelIndex) shallowCopy() *ModelIndex {
 	return &ModelIndex{
-		byFQN:  idx.byFQN,
-		traits: idx.traits,
-		syms:   idx.syms,
-		schema: idx.schema,
+		byFQN:   idx.byFQN,
+		traits:  idx.traits,
+		syms:    idx.syms,
+		schema:  idx.schema,
+		members: idx.members,
 	}
 }
 

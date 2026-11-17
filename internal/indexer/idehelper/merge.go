@@ -22,15 +22,6 @@ var (
 	methodTagRe = regexp.MustCompile(`@method\b[^\(]+\b(\w+)\s*\(`)
 )
 
-// phpPrimitives is the set of PHP built-in types that are never class references.
-var phpPrimitives = map[string]bool{
-	"string": true, "int": true, "integer": true, "float": true, "double": true,
-	"bool": true, "boolean": true, "array": true, "null": true, "void": true,
-	"mixed": true, "never": true, "object": true, "iterable": true, "callable": true,
-	"false": true, "true": true, "self": true, "static": true, "parent": true,
-	"resource": true,
-}
-
 // ideProperty holds the name and optional type string for a @property tag.
 type ideProperty struct {
 	name    string
@@ -158,7 +149,7 @@ func resolveClassType(typeStr string, fc *phputil.FileContext) phputil.FQN {
 	if strings.ContainsAny(typeStr, "|&<>[") {
 		return ""
 	}
-	if phpPrimitives[strings.ToLower(typeStr)] {
+	if phputil.IsPrimitiveType(typeStr) {
 		return ""
 	}
 	return fc.Resolve(typeStr)

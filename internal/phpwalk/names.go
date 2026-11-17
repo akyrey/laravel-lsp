@@ -125,3 +125,20 @@ func attributeName(attr *ts.Node, src []byte) string {
 	}
 	return ""
 }
+
+// UsedTraits returns the trait names (as written, unresolved) imported by
+// `use A, B;` statements directly inside a class or trait body.
+func UsedTraits(body *ts.Node, src []byte) []string {
+	return collectUseTraits(src, body)
+}
+
+// ExtendsName returns the parent class of a class declaration as written
+// (unresolved), or "" when it has no extends clause.
+func ExtendsName(classDecl *ts.Node, src []byte) string {
+	for i := uint(0); i < classDecl.ChildCount(); i++ {
+		if child := classDecl.Child(i); child.Kind() == "base_clause" {
+			return baseClauseText(src, child)
+		}
+	}
+	return ""
+}

@@ -54,12 +54,15 @@ func findPropertyFetch(t *testing.T, src []byte, want string) (phpwalk.PropertyF
 	return phpwalk.PropertyFetchInfo{}, nil, nil, nil
 }
 
-func testModelIndex(t *testing.T) *eloquent.ModelIndex {
-	t.Helper()
+func testModelIndex(t *testing.T) *eloquent.ModelIndex { return testModelIndexB(t) }
+
+// testModelIndexB indexes testdata/models; usable from tests and benchmarks.
+func testModelIndexB(tb testing.TB) *eloquent.ModelIndex {
+	tb.Helper()
 	modelsRoot := filepath.Join("..", "..", "testdata", "models")
 	idx, err := eloquent.Walk(modelsRoot, []string{"."})
 	if err != nil {
-		t.Fatalf("eloquent.Walk: %v", err)
+		tb.Fatalf("eloquent.Walk: %v", err)
 	}
 	return idx
 }
@@ -73,10 +76,10 @@ class Scratch {
     }
 }
 `)
-	pf, method, fc, tree := findPropertyFetch(t, src, "email_address")
+	pf, _, fc, tree := findPropertyFetch(t, src, "email_address")
 	defer tree.Close()
 
-	got := resolveExprType(pf.VarRaw, pf.Src, "App\\Models\\Scratch", method.Params, nil, fc, testModelIndex(t))
+	got := resolveExprType(pf.VarRaw, pf.Src, fc, testModelIndex(t))
 	if got != "App\\Models\\Scratch" {
 		t.Errorf("resolveExprType($this) = %q, want %q", got, "App\\Models\\Scratch")
 	}
@@ -91,10 +94,10 @@ class Scratch {
     }
 }
 `)
-	pf, method, fc, tree := findPropertyFetch(t, src, "email_address")
+	pf, _, fc, tree := findPropertyFetch(t, src, "email_address")
 	defer tree.Close()
 
-	got := resolveExprType(pf.VarRaw, pf.Src, "App\\Models\\Scratch", method.Params, nil, fc, testModelIndex(t))
+	got := resolveExprType(pf.VarRaw, pf.Src, fc, testModelIndex(t))
 	if got != "App\\Models\\User" {
 		t.Errorf("resolveExprType($u typed param) = %q, want %q", got, "App\\Models\\User")
 	}
@@ -110,11 +113,10 @@ class Scratch {
     }
 }
 `)
-	pf, method, fc, tree := findPropertyFetch(t, src, "email_address")
+	pf, _, fc, tree := findPropertyFetch(t, src, "email_address")
 	defer tree.Close()
-	assignedVars := collectAssignments(*method, fc)
 
-	got := resolveExprType(pf.VarRaw, pf.Src, "App\\Models\\Scratch", method.Params, assignedVars, fc, testModelIndex(t))
+	got := resolveExprType(pf.VarRaw, pf.Src, fc, testModelIndex(t))
 	if got != "App\\Models\\User" {
 		t.Errorf("resolveExprType($u = new User()) = %q, want %q", got, "App\\Models\\User")
 	}
@@ -130,11 +132,10 @@ class Scratch {
     }
 }
 `)
-	pf, method, fc, tree := findPropertyFetch(t, src, "email_address")
+	pf, _, fc, tree := findPropertyFetch(t, src, "email_address")
 	defer tree.Close()
-	assignedVars := collectAssignments(*method, fc)
 
-	got := resolveExprType(pf.VarRaw, pf.Src, "App\\Models\\Scratch", method.Params, assignedVars, fc, testModelIndex(t))
+	got := resolveExprType(pf.VarRaw, pf.Src, fc, testModelIndex(t))
 	if got != "App\\Models\\User" {
 		t.Errorf("resolveExprType($u = User::find(1)) = %q, want %q", got, "App\\Models\\User")
 	}
@@ -154,10 +155,10 @@ class Scratch {
     }
 }
 `)
-	pf, method, fc, tree := findPropertyFetch(t, src, "email_address")
+	pf, _, fc, tree := findPropertyFetch(t, src, "email_address")
 	defer tree.Close()
 
-	got := resolveExprType(pf.VarRaw, pf.Src, "App\\Models\\Scratch", method.Params, nil, fc, testModelIndex(t))
+	got := resolveExprType(pf.VarRaw, pf.Src, fc, testModelIndex(t))
 	if got != "App\\Models\\User" {
 		t.Errorf("resolveExprType($u->posts->author) = %q, want %q (two relationship hops)", got, "App\\Models\\User")
 	}
@@ -172,17 +173,17 @@ class Scratch {
     }
 }
 `)
-	pf, method, fc, tree := findPropertyFetch(t, src, "email_address")
+	pf, _, fc, tree := findPropertyFetch(t, src, "email_address")
 	defer tree.Close()
 
-	got := resolveExprType(pf.VarRaw, pf.Src, "App\\Models\\Scratch", method.Params, nil, fc, testModelIndex(t))
+	got := resolveExprType(pf.VarRaw, pf.Src, fc, testModelIndex(t))
 	if got != "" {
 		t.Errorf("resolveExprType($mystery) = %q, want empty", got)
 	}
 }
 
 func TestResolveExprType_NilExpr(t *testing.T) {
-	got := resolveExprType(nil, nil, "", nil, nil, &phputil.FileContext{Uses: make(phputil.UseMap)}, testModelIndex(t))
+	got := resolveExprType(nil, nil, &phputil.FileContext{Uses: make(phputil.UseMap)}, testModelIndex(t))
 	if got != "" {
 		t.Errorf("resolveExprType(nil) = %q, want empty", got)
 	}

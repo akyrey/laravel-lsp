@@ -6,6 +6,7 @@ import (
 
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
+	ts "github.com/tree-sitter/go-tree-sitter"
 
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
 	"github.com/akyrey/laravel-lsp/internal/indexer/strindex"
@@ -190,8 +191,9 @@ func isIdentByte(b byte) bool {
 		(b >= '0' && b <= '9') || b == '_'
 }
 
-// resolveVarTypeAtOffset parses src and returns the model FQN for varVal at
-// the given cursor offset.
+// resolveVarTypeAtOffset parses src and returns the model FQN of variable
+// varVal as seen at the cursor offset, using the same scope rules as every
+// other feature (see typeResolver).
 func resolveVarTypeAtOffset(src []byte, path string, varVal string, offset int) phputil.FQN {
 	tree, err := phpnode.ParseBytes(src)
 	if err != nil {
@@ -199,49 +201,33 @@ func resolveVarTypeAtOffset(src []byte, path string, varVal string, offset int) 
 	}
 	defer tree.Close()
 
-	v := &varTypeVisitor{
-		fc:     &phputil.FileContext{Path: path, Uses: make(phputil.UseMap)},
-		offset: offset,
-		varVal: varVal,
+	fc := fileContextOf(path, src, tree)
+	at := tree.RootNode().NamedDescendantForByteRange(uint(max(offset-1, 0)), uint(max(offset-1, 0)))
+	if at == nil {
+		return ""
 	}
-	phpwalk.Walk(v.fc.Path, src, tree, v)
-	return v.fqn
+	r := newTypeResolver(src, fc, nil)
+	if varVal == "$this" {
+		return r.enclosingClass(at)
+	}
+	return r.varType(varVal, at, offset, 0)
 }
 
-// varTypeVisitor resolves a single variable name to its model FQN at a given
-// byte offset by tracking the enclosing class/method scope.
-type varTypeVisitor struct {
+// fileContextOf collects the namespace and use-statements of a parsed file.
+func fileContextOf(path string, src []byte, tree *ts.Tree) *phputil.FileContext {
+	v := &fileContextVisitor{fc: &phputil.FileContext{Path: path, Uses: make(phputil.UseMap)}}
+	phpwalk.Walk(path, src, tree, v)
+	return v.fc
+}
+
+type fileContextVisitor struct {
 	phpwalk.NullVisitor
-	fc     *phputil.FileContext
-	offset int
-	varVal string
-
-	encClass phputil.FQN
-	fqn      phputil.FQN
+	fc *phputil.FileContext
 }
 
-func (v *varTypeVisitor) VisitNamespace(ns string) { v.fc.Namespace = phputil.FQN(ns) }
-func (v *varTypeVisitor) VisitUseItem(alias, fqn string) {
+func (v *fileContextVisitor) VisitNamespace(ns string) { v.fc.Namespace = phputil.FQN(ns) }
+func (v *fileContextVisitor) VisitUseItem(alias, fqn string) {
 	v.fc.Uses[alias] = phputil.FQN(fqn)
-}
-
-func (v *varTypeVisitor) VisitClass(n phpwalk.ClassInfo) {
-	if !cursorOnNode(v.offset, n.Raw) {
-		return
-	}
-	v.encClass = v.fc.Resolve(n.NameText)
-}
-
-func (v *varTypeVisitor) VisitClassMethod(n phpwalk.MethodInfo) {
-	if v.offset < n.StartByte || v.offset >= n.EndByte {
-		return
-	}
-	if v.varVal == "$this" || v.varVal == "this" {
-		v.fqn = v.encClass
-		return
-	}
-	assigned := collectAssignments(n, v.fc)
-	v.fqn = resolveVarFQN(v.varVal, n.Params, assigned, v.fc)
 }
 
 // kindLabel maps AttributeKind to a short human-readable tag.

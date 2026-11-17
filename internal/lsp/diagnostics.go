@@ -95,16 +95,14 @@ func collectDiagnostics(src []byte, path string, models *eloquent.ModelIndex, st
 
 type diagVisitor struct {
 	phpwalk.NullVisitor
-	fc           *phputil.FileContext
-	path         string
-	src          []byte
-	models       *eloquent.ModelIndex
-	strs         *strindex.Index
-	opts         diagOptions
-	encClass     phputil.FQN
-	encMethod    *phpwalk.MethodInfo
-	assignedVars map[string]phputil.FQN
-	diags        []protocol.Diagnostic
+	types  typeCache
+	fc     *phputil.FileContext
+	path   string
+	src    []byte
+	models *eloquent.ModelIndex
+	strs   *strindex.Index
+	opts   diagOptions
+	diags  []protocol.Diagnostic
 }
 
 func (v *diagVisitor) VisitNamespace(ns string) { v.fc.Namespace = phputil.FQN(ns) }
@@ -112,25 +110,11 @@ func (v *diagVisitor) VisitUseItem(alias, fqn string) {
 	v.fc.Uses[alias] = phputil.FQN(fqn)
 }
 
-func (v *diagVisitor) VisitClass(n phpwalk.ClassInfo) {
-	v.encClass = v.fc.Resolve(n.NameText)
-	v.encMethod = nil
-}
-
-func (v *diagVisitor) VisitClassMethod(n phpwalk.MethodInfo) {
-	v.encMethod = &n
-	v.assignedVars = collectAssignments(n, v.fc)
-}
-
 func (v *diagVisitor) VisitPropertyFetch(n phpwalk.PropertyFetchInfo) {
 	if v.models == nil || builtinModelAttrs[n.PropName] || v.opts.ignore[n.PropName] {
 		return
 	}
-	var params []phpwalk.ParamInfo
-	if v.encMethod != nil {
-		params = v.encMethod.Params
-	}
-	modelFQN := resolveExprType(n.VarRaw, n.Src, v.encClass, params, v.assignedVars, v.fc, v.models)
+	modelFQN := v.types.resolve(n.VarRaw, n.Src, v.fc, v.models)
 	if modelFQN == "" {
 		return
 	}

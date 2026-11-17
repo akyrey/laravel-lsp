@@ -14,6 +14,7 @@ import (
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 
+	"github.com/akyrey/laravel-lsp/internal/classinfo"
 	"github.com/akyrey/laravel-lsp/internal/composer"
 	"github.com/akyrey/laravel-lsp/internal/indexer/container"
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
@@ -180,6 +181,7 @@ type Server struct {
 	models   *eloquent.ModelIndex
 	strIndex *strindex.Index
 	schema   *migrations.Schema
+	autoload *composer.Autoload
 }
 
 // NewServer creates a Server ready to accept LSP requests.
@@ -386,11 +388,12 @@ func (s *Server) reindex(root string) {
 			s.log.Errorf("laravel-lsp: idehelper merge: %v", err)
 		}
 		// Last: these share the catalog maps, so no Add may follow.
-		models = models.WithSchema(schema)
+		models = models.WithSchema(schema).WithClassMembers(classinfo.New(auto))
 	}
 
 	s.mu.Lock()
 	s.schema = schema
+	s.autoload = auto
 	if err1 == nil {
 		s.bindings = bindings
 	}
@@ -543,7 +546,7 @@ func (s *Server) watchLoop(w *fsnotify.Watcher, root string) {
 // (e.g., first startup before any index exists).
 func (s *Server) reindexFiles(root string, paths []string) {
 	s.mu.RLock()
-	bindings, models, schema, cfg := s.bindings, s.models, s.schema, s.cfg
+	bindings, models, schema, auto, cfg := s.bindings, s.models, s.schema, s.autoload, s.cfg
 	s.mu.RUnlock()
 
 	if bindings == nil || models == nil || bindings.Syms() == nil || models.Syms() == nil ||
@@ -602,6 +605,12 @@ func (s *Server) reindexFiles(root string, paths []string) {
 		s.schema = schema
 		s.mu.Unlock()
 	}
+	// Property types are memoized per file parse; any PHP change may alter
+	// them, so start a fresh (lazily filled) lookup.
+	if hasPHP(paths) {
+		newModels = newModels.WithClassMembers(classinfo.New(auto))
+	}
+
 	if newBindings != bindings || newModels != models {
 		s.mu.Lock()
 		s.bindings = newBindings
@@ -637,6 +646,16 @@ func needsFullReindex(root string, paths []string) bool {
 	}
 	for _, p := range paths {
 		if full[p] {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPHP reports whether any path is a PHP source file.
+func hasPHP(paths []string) bool {
+	for _, p := range paths {
+		if strings.HasSuffix(p, ".php") {
 			return true
 		}
 	}

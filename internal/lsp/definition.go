@@ -73,6 +73,7 @@ func findDefinition(
 // defVisitor is a single-pass visitor that collects definition jump targets.
 type defVisitor struct {
 	phpwalk.NullVisitor
+	types    typeCache
 	src      []byte
 	path     string
 	fc       *phputil.FileContext
@@ -82,31 +83,12 @@ type defVisitor struct {
 	strs     *strindex.Index
 	docs     *DocumentStore
 
-	encClass     phputil.FQN
-	encMethod    *phpwalk.MethodInfo
-	assignedVars map[string]phputil.FQN
-
 	locations []protocol.Location
 }
 
 func (v *defVisitor) VisitNamespace(ns string) { v.fc.Namespace = phputil.FQN(ns) }
 func (v *defVisitor) VisitUseItem(alias, fqn string) {
 	v.fc.Uses[alias] = phputil.FQN(fqn)
-}
-
-func (v *defVisitor) VisitClass(n phpwalk.ClassInfo) {
-	if v.offset < int(n.Raw.StartByte()) || v.offset >= int(n.Raw.EndByte()) {
-		return
-	}
-	v.encClass = v.fc.Resolve(n.NameText)
-}
-
-func (v *defVisitor) VisitClassMethod(n phpwalk.MethodInfo) {
-	if v.offset < n.StartByte || v.offset >= n.EndByte {
-		return
-	}
-	v.encMethod = &n
-	v.assignedVars = collectAssignments(n, v.fc)
 }
 
 // — Flow 1: Service-container lookup —
@@ -142,13 +124,37 @@ func (v *defVisitor) VisitStaticCall(n phpwalk.StaticCallInfo) {
 	if nameNode == nil || !cursorOnNode(v.offset, nameNode) {
 		return
 	}
-	cat := v.models.Lookup(v.fc.Resolve(n.ClassName))
+	v.appendScopeLocation(v.fc.Resolve(n.ClassName), n.MethodName)
+}
+
+// appendScopeLocation adds the declaration of scope name on model, if any.
+func (v *defVisitor) appendScopeLocation(model phputil.FQN, name string) {
+	if model == "" {
+		return
+	}
+	cat := v.models.Lookup(model)
 	if cat == nil {
 		return
 	}
-	if loc, ok := cat.Scopes[n.MethodName]; ok && !loc.Zero() {
+	if loc, ok := cat.Scopes[name]; ok && !loc.Zero() {
 		v.locations = append(v.locations, toLSPLocation(loc, v.docs))
 	}
+}
+
+// VisitMethodCall jumps from a scope name called on a query builder,
+// relation, or model instance: Post::query()->published(),
+// $user->posts()->published(), $post->published().
+func (v *defVisitor) VisitMethodCall(n phpwalk.MethodCallInfo) {
+	nameNode := n.Raw.ChildByFieldName("name")
+	if nameNode == nil || !cursorOnNode(v.offset, nameNode) {
+		return
+	}
+	r := v.types.resolver(n.Src, v.fc, v.models)
+	model := r.builderModel(n.VarRaw, 0)
+	if model == "" && !r.isCollectionCall(n.VarRaw) {
+		model = r.exprType(n.VarRaw, 0) // scopes forward from model instances
+	}
+	v.appendScopeLocation(model, n.MethodName)
 }
 
 func (v *defVisitor) VisitInstanceOf(n phpwalk.InstanceOfInfo) {
@@ -165,11 +171,7 @@ func (v *defVisitor) VisitPropertyFetch(n phpwalk.PropertyFetchInfo) {
 	if v.offset < n.PropLocation.StartByte || v.offset >= n.PropLocation.EndByte {
 		return
 	}
-	var params []phpwalk.ParamInfo
-	if v.encMethod != nil {
-		params = v.encMethod.Params
-	}
-	modelFQN := resolveExprType(n.VarRaw, n.Src, v.encClass, params, v.assignedVars, v.fc, v.models)
+	modelFQN := v.types.resolve(n.VarRaw, n.Src, v.fc, v.models)
 	if modelFQN == "" {
 		return
 	}
