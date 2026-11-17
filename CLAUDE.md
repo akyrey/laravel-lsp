@@ -61,6 +61,7 @@ Passed by the editor in the LSP `initialize` request. All fields are optional.
 {
   "scanDirs":      ["app", "Modules/*/app"],
   "referenceDirs": ["app", "routes", "Modules/*/app", "Modules/*/routes"],
+  "migrationDirs": ["database/migrations"],
   "diagnostics": {
     "enabled": true,
     "severity": "warning",
@@ -73,6 +74,7 @@ Passed by the editor in the LSP `initialize` request. All fields are optional.
 |-------|---------|---------|
 | `scanDirs` | `["app"]` | Directories walked to build the container + Eloquent indexes |
 | `referenceDirs` | *(auto)* | Directories walked when finding references and rename sites. Defaults to `scanDirs + ["routes"]` when not set. |
+| `migrationDirs` | `["database/migrations"]` | Directories whose `up()` migrations supply model columns. An empty expansion means no columns (never a silent fallback). |
 | `diagnostics.enabled` | `true` | Toggle unknown-property diagnostics |
 | `diagnostics.severity` | `"warning"` | One of `error`, `warning`, `information`, `hint` (unknown values fall back to warning) |
 | `diagnostics.ignoreProperties` | `[]` | Property names never flagged, on any model |
@@ -96,7 +98,13 @@ cmd/laravel-lsp/
   main.go                       # entry point: dispatches LSP server or debug subcommand
   debug.go                      # `laravel-lsp debug` — index inspection tool
 internal/
+  composer/
+    autoload.go                 # PSR-4 map from composer.json + vendor/composer/installed.json
+    parents.go                  # Parents: memoized "what does vendor class X extend?"
+  classinfo/
+    classinfo.go                # typed props / promoted params via traits + parents
   indexer/
+    migrations/                 # Schema: table → column → Location (Schema::create/table)
     container/                  # service-container binding indexer
       index.go                  # BindingIndex + Binding types
       symbols.go                # classDecl + symbolTable (phase 1 output)
@@ -126,7 +134,10 @@ internal/
     codeaction.go               # textDocument/codeAction
     symbols.go                  # textDocument/documentSymbol
     workspacesymbol.go          # workspace/symbol — project-wide search
-    scope.go                    # $var → FQN inference (assignments + typed params)
+    scope.go                    # typeResolver: expression → FQN, walking up the tree
+    bindings.go                 # per-scope variable bindings (assignments, foreach, ...)
+    builder.go                  # query-builder chains: builderModel, terminal methods
+    strref.go                   # findStringRefCalls: config/view/route/env call forms
     documents.go                # DocumentStore — in-memory cache with disk fallback
     uri.go                      # URI/path conversion, UTF-16 position helpers
   phpnode/
@@ -186,6 +197,29 @@ returns the full text including `$`, e.g. `"$this"`. Variable name comparisons
 always use the full `$`-prefixed string.
 
 ## Key design decisions
+
+- **Vendor ancestry**: indexers only walk `scanDirs`, so `WithExternalParents`
+  plugs a `composer.Parents` resolver into the symbol table (retained by
+  `ReindexFile`) to continue `extends` chains into `vendor/`. Without it,
+  `User extends Authenticatable` is not a model.
+- **Published-index attachments**: `ModelIndex.WithSchema` (migration columns)
+  and `WithClassMembers` (typed-property lookup) return shallow copies sharing
+  the catalog maps; call them last, after every `Add` (including the
+  ide-helper merge). Columns appear only in `Lookup`'s merged view as
+  `MigrationColumn`/`SourceMigration` entries, so rename never edits migrations.
+- **Copy-on-write ide-helper merge**: `idehelper.Merge` replaces a catalog
+  with a `Clone()` instead of appending to it — carried-over catalogs may be
+  in use by concurrent readers. Editing the stub, `composer.json`, or
+  `installed.json` triggers a full reindex (`needsFullReindex`).
+- **Type resolution** (`internal/lsp/scope.go`): scope comes from the syntax
+  tree, not visitor state. One `typeResolver` per file (embed `typeCache` in
+  visitors) caches a span index of scopes (tree-sitter's `Parent()` is
+  O(depth) via CGo — avoid it in hot paths), per-scope bindings, and local
+  class summaries. A variable's candidate bindings before the cursor must
+  all agree; destructuring/compound/catch/global/static rebinding makes it
+  unknown, so diagnostics never act on a stale type. Collections resolve to
+  their element model (relationships, `->get()`), which is what `foreach`
+  needs; `isCollectionCall` guards method calls on them.
 
 - **PHP version support**: tree-sitter-php v0.24.2 parses PHP 5–8.x with full
   error recovery. PHP 8.4 property hooks and asymmetric visibility parse cleanly
@@ -264,6 +298,10 @@ always use the full `$`-prefixed string.
     containing multi-byte Unicode characters (e.g. emoji in strings/comments).
 
 **Known limitations:**
+- Type inference is flow-insensitive within loops (a reassignment later in a
+  loop body is ignored on the next iteration) and does not read `@var`
+  docblocks or method return types of non-Eloquent classes.
+- Nested `namespace {}` blocks in one file share use-imports in all visitors.
 - References scan covers `app/` and `routes/` only (configurable via `referenceScanDirs`).
 - Relationship detection requires `return $this->relationMethod(Class::class)`;
   multi-statement bodies are not detected.

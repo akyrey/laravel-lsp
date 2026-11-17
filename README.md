@@ -32,9 +32,28 @@ Jump from `$user->email_address` to the accessor declaration.
 - Legacy accessors/mutators: `getXxxAttribute()` / `setXxxAttribute()` methods
 - Array properties: `$fillable`, `$casts`, `$appends`, `$hidden`
 - Relationships: typed (`: HasMany`) and untyped (`return $this->hasMany(...)`) methods
+- Database columns from migrations: `$user->email` jumps to `$table->string('email')`
+  (table from `$table` or Laravel's plural snake-case convention)
+- Query scopes, both `scopeActive()` and Laravel 12 `#[Scope] protected function active()`,
+  from `User::active()`, `User::query()->where(...)->active()`, `$team->users()->active()`
 - Chained access: `$user->posts->slug_url` resolves through the relationship to `Post`
-- Assignment inference: `$user = User::find(...)` / `new User()` infers the type without a type hint
-- `_ide_helper_models.php` entries merged in (AST entries win on conflict)
+- Type inference without hints: typed parameters of methods, functions, closures and
+  arrow functions (`fn (User $u) => $u->email`), prior assignments (`User::find()`,
+  `new User()`, `User::where()->first()`), `foreach` over relations, and typed
+  properties (`$this->user->email`, including properties declared in traits and
+  parent classes in other files)
+- Models extending vendor classes (`User extends Authenticatable`, Spatie `Role`)
+  are found by following `extends` into `vendor/` via Composer's autoload metadata
+- `_ide_helper_models.php` entries merged in (AST entries win on conflict), including
+  `--write-mixin` stubs (`IdeHelperUser`)
+
+### String references
+
+`config('app.name')`, `view('users.index')`, `route('home')`, `env('APP_KEY')` jump
+to their declaration with the cursor on the key or on the helper name; also
+`to_route()`, `redirect()->route()`, `url()->route()`, and the `Config`, `View`,
+`Redirect`, `URL` facades. Unknown keys are diagnosed (existence checks such as
+`View::exists()` never are).
 
 ### LSP handlers
 
@@ -54,7 +73,11 @@ Jump from `$user->email_address` to the accessor declaration.
 
 - **Two-phase**: symbol scan builds the class hierarchy; extraction pass emits index entries
 - **Incremental reindex**: file-save events trigger per-file reindex instead of a full walk
-- **File watcher**: `app/` and `routes/` watched via `fsnotify`; 500 ms debounce
+- **File watcher**: scan, reference, migration, config and view dirs watched via
+  `fsnotify` with a 500 ms debounce; `composer.json`, `vendor/composer/installed.json`
+  and `_ide_helper_models.php` changes trigger a full reindex
+- **Log summary**: after indexing the server logs model, binding, migration-table and
+  Composer-prefix counts — check your editor's LSP log when navigation returns nothing
 
 ## Requirements
 
@@ -84,6 +107,7 @@ request. All fields are optional.
 |-------|------|---------|-------------|
 | `scanDirs` | `string[]` | `["app"]` | Directories to index (models, service providers). Supports single-level glob patterns. |
 | `referenceDirs` | `string[]` | *(auto)* | Directories searched when finding references and rename sites. Defaults to `scanDirs + ["routes"]`. Supports glob patterns. |
+| `migrationDirs` | `string[]` | `["database/migrations"]` | Directories whose migrations supply model columns. Supports glob patterns (e.g. `Modules/*/database/migrations`). |
 
 `referenceDirs` is auto-derived from `scanDirs + ["routes"]` when not explicitly
 set — so adding module directories to `scanDirs` is usually all you need.
@@ -182,7 +206,10 @@ cmd/laravel-lsp/
   main.go                   # entry point — LSP server or debug subcommand
   debug.go                  # laravel-lsp debug — index inspection tool
 internal/
+  composer/                 # PSR-4 class locator + vendor parent-class resolver
+  classinfo/                # typed-property lookup across classes, traits, parents
   indexer/
+    migrations/             # table → column index from database/migrations
     container/              # service-container binding indexer
       index.go              # BindingIndex type
       symbols.go            # cross-file class declaration map
@@ -209,7 +236,10 @@ internal/
     diagnostics.go          # textDocument/publishDiagnostics
     codeaction.go           # textDocument/codeAction
     symbols.go              # textDocument/documentSymbol
-    scope.go                # $var → FQN inference (assignments + typed params)
+    scope.go                # expression → FQN inference (walks up the syntax tree)
+    bindings.go             # per-scope variable bindings for scope.go
+    builder.go              # Eloquent query-builder chains (scopes, terminals)
+    strref.go               # config/view/route/env call recognition
     documents.go            # DocumentStore — in-memory cache with disk fallback
     uri.go                  # URI/path conversion, UTF-16 position helpers
   phpnode/
