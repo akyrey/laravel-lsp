@@ -350,3 +350,23 @@ func TestReindexFiles_EnvChangeRefreshesStringIndex(t *testing.T) {
 		t.Error("model index was rebuilt for a .env-only change")
 	}
 }
+
+func TestIsWatchedFile(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/p/app/Models/User.php", true},
+		{"/p/.env", true},
+		{"/p/.env.example", true},
+		{"/p/composer.json", true},
+		{"/p/vendor/composer/installed.json", true},
+		{"/p/package.json", false},
+		{"/p/app/Models/User.php.swp", false},
+	}
+	for _, tc := range tests {
+		if got := isWatchedFile(tc.path); got != tc.want {
+			t.Errorf("isWatchedFile(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}

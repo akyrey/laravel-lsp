@@ -73,13 +73,13 @@ var DefaultScanDirs = []string{"app"}
 //     resolve Concrete class locations.
 //
 // Parse errors are logged to stderr and skipped — they do not abort the walk.
-func Walk(root string, dirs []string) (*BindingIndex, error) {
+func Walk(root string, dirs []string, opts ...Option) (*BindingIndex, error) {
 	if len(dirs) == 0 {
 		dirs = DefaultScanDirs
 	}
 
 	// Phase 1: symbol scan.
-	syms, err := buildSymbolTable(root, dirs)
+	syms, err := buildSymbolTable(root, dirs, opts)
 	if err != nil {
 		return nil, fmt.Errorf("container scan: %w", err)
 	}

@@ -73,8 +73,8 @@ var DefaultScanDirs = []string{"app"}
 // Walk scans dirs (relative to root) in two phases:
 //  1. Build a symbol table mapping class FQNs to their extends chain.
 //  2. Extract ModelCatalog entries from every Model subclass found.
-func Walk(root string, dirs []string) (*ModelIndex, error) {
-	syms, err := buildSymbolTable(root, dirs)
+func Walk(root string, dirs []string, opts ...Option) (*ModelIndex, error) {
+	syms, err := buildSymbolTable(root, dirs, opts)
 	if err != nil {
 		return nil, fmt.Errorf("eloquent: symbol scan: %w", err)
 	}

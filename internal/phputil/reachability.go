@@ -1,5 +1,10 @@
 package phputil
 
+// ParentFunc returns the FQN of fqn's direct parent class, or "" when fqn has
+// no parent or the declaration is unknown. Indexers use it to continue an
+// extends chain past the directories they scan (e.g. into vendor/).
+type ParentFunc func(fqn FQN) FQN
+
 // ResolveReachable returns the subset of fqns that, by following the chain
 // returned by extendsOf, eventually reach baseFQN (fqns equal to baseFQN
 // itself count as reachable). extendsOf returns the direct parent FQN for

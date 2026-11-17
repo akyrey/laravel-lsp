@@ -14,6 +14,7 @@ import (
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 
+	"github.com/akyrey/laravel-lsp/internal/composer"
 	"github.com/akyrey/laravel-lsp/internal/indexer/container"
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
 	"github.com/akyrey/laravel-lsp/internal/indexer/idehelper"
@@ -330,6 +331,8 @@ func (s *Server) reindex(root string) {
 
 	scanDirs := expandDirs(root, cfg.ScanDirs)
 	s.log.Infof("laravel-lsp: indexing %s (dirs: %v)", root, scanDirs)
+	auto := s.loadAutoload(root)
+	parents := composer.NewParents(auto).ParentOf
 
 	var wg sync.WaitGroup
 	var bindings *container.BindingIndex
@@ -340,11 +343,11 @@ func (s *Server) reindex(root string) {
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		bindings, err1 = container.Walk(root, scanDirs)
+		bindings, err1 = container.Walk(root, scanDirs, container.WithExternalParents(parents))
 	}()
 	go func() {
 		defer wg.Done()
-		models, err2 = eloquent.Walk(root, scanDirs)
+		models, err2 = eloquent.Walk(root, scanDirs, eloquent.WithExternalParents(parents))
 	}()
 	go func() {
 		defer wg.Done()
@@ -376,12 +379,34 @@ func (s *Server) reindex(root string) {
 	}
 	s.strIndex = strIdx
 	s.mu.Unlock()
-	s.log.Infof("laravel-lsp: indexing complete")
+	// One summary line makes "navigation returns nothing" diagnosable from
+	// the editor's LSP log: zero models usually means wrong scanDirs or a
+	// missing `composer install`.
+	s.log.Infof("laravel-lsp: indexing complete: %d models, %d bindings, %d composer PSR-4 prefixes",
+		countModels(models), countBindings(bindings), auto.Size())
 	if models != nil {
 		for _, c := range models.All() {
 			s.log.Debugf("laravel-lsp: indexed model %s (%s)", c.Class, c.Path)
 		}
 	}
+}
+
+// loadAutoload reads the project's Composer autoload metadata, used to
+// follow extends chains into vendor/ and to look up property types of
+// classes outside the open buffer. It is reloaded on every full reindex so
+// `composer update` is picked up. On a decode error it logs and continues
+// with whatever could be read; an empty map makes chains stop at the
+// project boundary.
+func (s *Server) loadAutoload(root string) *composer.Autoload {
+	auto, err := composer.Load(root)
+	if err != nil {
+		s.log.Errorf("laravel-lsp: composer autoload (continuing with what could be read): %v", err)
+	}
+	if auto.Size() == 0 {
+		s.log.Warningf("laravel-lsp: no Composer PSR-4 mappings under %s: models extending vendor classes "+
+			"(e.g. User extends Authenticatable) will not be recognised until `composer install` runs", root)
+	}
+	return auto
 }
 
 // startWatcher watches the union of scan and reference directories under root
@@ -404,22 +429,45 @@ func (s *Server) startWatcher(root string) {
 		return
 	}
 
+	failed := 0
+	add := func(dir string) {
+		if err := w.Add(dir); err != nil {
+			failed++
+			if failed == 1 { // usually an OS watch limit: report once, not per dir
+				s.log.Warningf("laravel-lsp: cannot watch %s (changes there will need a restart): %v", dir, err)
+			}
+		}
+	}
 	for _, dir := range watchSet {
 		scanDir := filepath.Join(root, dir)
 		if _, err := os.Stat(scanDir); err != nil {
 			continue
 		}
-		_ = filepath.WalkDir(scanDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || !d.IsDir() {
-				return nil
+		if err := filepath.WalkDir(scanDir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				add(path)
 			}
-			return w.Add(path)
-		})
+			return nil
+		}); err != nil {
+			s.log.Warningf("laravel-lsp: watcher walk %s: %v", scanDir, err)
+		}
 	}
-	// The project root itself (non-recursive) for .env / .env.example writes.
-	_ = w.Add(root)
+	// Non-recursive: the project root for .env / .env.example / composer.json,
+	// and vendor/composer for installed.json (rewritten by composer install).
+	add(root)
+	if vendorComposer := filepath.Join(root, "vendor", "composer"); dirExists(vendorComposer) {
+		add(vendorComposer)
+	}
+	if failed > 0 {
+		s.log.Warningf("laravel-lsp: %d directories are not watched", failed)
+	}
 
 	go s.watchLoop(w, root)
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // watchLoop is the event loop for the fsnotify watcher. It accumulates changed
@@ -443,7 +491,7 @@ func (s *Server) watchLoop(w *fsnotify.Watcher, root string) {
 					_ = w.Add(event.Name)
 				}
 			}
-			if strings.HasSuffix(event.Name, ".php") || isEnvFile(event.Name) {
+			if isWatchedFile(event.Name) {
 				changedPaths[event.Name] = true
 				if !timer.Stop() {
 					select {
@@ -477,7 +525,8 @@ func (s *Server) reindexFiles(root string, paths []string) {
 	bindings, models := s.bindings, s.models
 	s.mu.RUnlock()
 
-	if bindings == nil || models == nil || bindings.Syms() == nil || models.Syms() == nil {
+	if bindings == nil || models == nil || bindings.Syms() == nil || models.Syms() == nil ||
+		needsFullReindex(root, paths) {
 		s.reindex(root)
 		return
 	}
@@ -531,6 +580,36 @@ func (s *Server) reindexFiles(root string, paths []string) {
 	s.log.Infof("laravel-lsp: incremental reindex complete (%d files)", len(paths))
 }
 
+func countModels(idx *eloquent.ModelIndex) int {
+	if idx == nil {
+		return 0
+	}
+	return len(idx.All())
+}
+
+func countBindings(idx *container.BindingIndex) int {
+	if idx == nil {
+		return 0
+	}
+	return len(idx.All())
+}
+
+// needsFullReindex reports whether a changed file affects every catalog
+// rather than one file's: Composer metadata (autoload and vendor ancestry
+// are loaded once per full reindex).
+func needsFullReindex(root string, paths []string) bool {
+	full := map[string]bool{
+		filepath.Join(root, "composer.json"):                        true,
+		filepath.Join(root, "vendor", "composer", "installed.json"): true,
+	}
+	for _, p := range paths {
+		if full[p] {
+			return true
+		}
+	}
+	return false
+}
+
 // strChanged reports whether any of paths lives under one of the
 // string-reference source directories.
 func strChanged(root string, paths []string) bool {
@@ -550,6 +629,13 @@ func strChanged(root string, paths []string) bool {
 		}
 	}
 	return false
+}
+
+// isWatchedFile reports whether a change to path can affect the indexes.
+func isWatchedFile(path string) bool {
+	return strings.HasSuffix(path, ".php") || isEnvFile(path) ||
+		filepath.Base(path) == "composer.json" ||
+		strings.HasSuffix(path, filepath.Join("vendor", "composer", "installed.json"))
 }
 
 // isEnvFile reports whether path is a dotenv file the string index reads.

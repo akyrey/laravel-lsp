@@ -19,6 +19,9 @@ type symbolTable struct {
 	classes map[phputil.FQN]*classDecl
 	models  map[phputil.FQN]struct{} // populated by resolveModels
 	byFile  map[string][]phputil.FQN // path → FQNs declared in that file
+	// external resolves parents of classes outside the scanned dirs; nil
+	// means the extends chain stops at the project boundary.
+	external phputil.ParentFunc
 }
 
 func newSymbolTable() *symbolTable {
@@ -48,9 +51,10 @@ func (st *symbolTable) removeFile(path string) {
 // shared since they are never mutated after construction).
 func (st *symbolTable) clone() *symbolTable {
 	c := &symbolTable{
-		classes: make(map[phputil.FQN]*classDecl, len(st.classes)),
-		models:  make(map[phputil.FQN]struct{}),
-		byFile:  make(map[string][]phputil.FQN, len(st.byFile)),
+		classes:  make(map[phputil.FQN]*classDecl, len(st.classes)),
+		models:   make(map[phputil.FQN]struct{}),
+		byFile:   make(map[string][]phputil.FQN, len(st.byFile)),
+		external: st.external,
 	}
 	for k, v := range st.classes {
 		c.classes[k] = v
@@ -75,10 +79,17 @@ func (st *symbolTable) resolveModels() {
 	for fqn := range st.classes {
 		fqns = append(fqns, fqn)
 	}
-	st.models = phputil.ResolveReachable(fqns, func(fqn phputil.FQN) phputil.FQN {
-		if decl, ok := st.classes[fqn]; ok {
-			return decl.Extends
-		}
-		return ""
-	}, modelBaseFQN)
+	st.models = phputil.ResolveReachable(fqns, st.parentOf, modelBaseFQN)
+}
+
+// parentOf returns fqn's direct parent: from the scanned declarations when
+// known, otherwise from the external resolver (if any).
+func (st *symbolTable) parentOf(fqn phputil.FQN) phputil.FQN {
+	if decl, ok := st.classes[fqn]; ok {
+		return decl.Extends
+	}
+	if st.external != nil {
+		return st.external(fqn)
+	}
+	return ""
 }

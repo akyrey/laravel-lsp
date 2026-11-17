@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akyrey/laravel-lsp/internal/composer"
 	"github.com/akyrey/laravel-lsp/internal/indexer/container"
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
 	"github.com/akyrey/laravel-lsp/internal/phputil"
@@ -70,14 +71,19 @@ func runDebug(args []string) {
 		dirs = []string{"app"}
 	}
 
-	// Walk both indexes.
-	modelIdx, err := eloquent.Walk(root, dirs)
+	// Walk both indexes, following extends chains into vendor/.
+	auto, err := composer.Load(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "laravel-lsp debug: composer autoload (continuing with what could be read): %v\n", err)
+	}
+	parents := composer.NewParents(auto).ParentOf
+	modelIdx, err := eloquent.Walk(root, dirs, eloquent.WithExternalParents(parents))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "laravel-lsp debug: eloquent index: %v\n", err)
 		os.Exit(1)
 	}
 
-	bindingIdx, err := container.Walk(root, dirs)
+	bindingIdx, err := container.Walk(root, dirs, container.WithExternalParents(parents))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "laravel-lsp debug: container index: %v\n", err)
 		os.Exit(1)

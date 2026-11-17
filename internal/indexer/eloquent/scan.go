@@ -46,8 +46,11 @@ func (v *scanVisitor) VisitClass(n phpwalk.ClassInfo) {
 	})
 }
 
-func buildSymbolTable(root string, dirs []string) (*symbolTable, error) {
+func buildSymbolTable(root string, dirs []string, opts []Option) (*symbolTable, error) {
 	syms := newSymbolTable()
+	for _, opt := range opts {
+		opt(syms)
+	}
 	err := phpnode.WalkPHPFiles(root, dirs, func(path string, src []byte, tree *ts.Tree) {
 		sv := newScanVisitor(path, syms)
 		phpwalk.Walk(path, src, tree, sv)

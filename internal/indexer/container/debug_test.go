@@ -29,7 +29,7 @@ func TestDebugExtract(t *testing.T) {
 	}
 	defer tree.Close()
 
-	syms, _ := buildSymbolTable("../../../testdata/bindings", []string{"."})
+	syms, _ := buildSymbolTable("../../../testdata/bindings", []string{"."}, nil)
 	bindings := extractFileBindings(path, src, tree, syms)
 	fmt.Printf("AppServiceProvider bindings: %d\n", len(bindings))
 	for _, b := range bindings {
@@ -38,7 +38,7 @@ func TestDebugExtract(t *testing.T) {
 }
 
 func TestDebugSymbols(t *testing.T) {
-	syms, err := buildSymbolTable("../../../testdata/bindings", []string{"."})
+	syms, err := buildSymbolTable("../../../testdata/bindings", []string{"."}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
