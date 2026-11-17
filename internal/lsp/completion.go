@@ -256,6 +256,7 @@ var kindLabel = map[eloquent.AttributeKind]string{
 	eloquent.HiddenArray:       "hidden",
 	eloquent.IdeHelperProperty: "property",
 	eloquent.IdeHelperMethod:   "method",
+	eloquent.MigrationColumn:   "column",
 }
 
 func completionItemKind(k eloquent.AttributeKind) protocol.CompletionItemKind {

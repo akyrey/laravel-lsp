@@ -47,6 +47,7 @@ func (v *extractVisitor) VisitClass(n phpwalk.ClassInfo) {
 		Path:       v.path,
 		Extends:    extends,
 		UsesTraits: resolveNames(v.fc, n.UsesTraits),
+		Table:      extractTableName(n.Raw, n.Src),
 		ByExposed:  make(map[string][]ModelAttribute),
 	}
 

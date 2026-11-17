@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/tliron/commonlog"
@@ -348,6 +349,28 @@ func TestReindexFiles_EnvChangeRefreshesStringIndex(t *testing.T) {
 	}
 	if s.models != modelsBefore {
 		t.Error("model index was rebuilt for a .env-only change")
+	}
+}
+
+// Editing _ide_helper_models.php must refresh entries, including removing
+// ones that were deleted from the stub.
+func TestReindexFiles_IdeHelperEditRefreshesEntries(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "app", "Models", "User.php"), reindexUserModel)
+	helper := filepath.Join(root, "_ide_helper_models.php")
+	writeFile(t, helper, reindexIdeHelper)
+	s := newRootedTestServer(t, root)
+	s.reindex(root)
+
+	writeFile(t, helper, strings.Replace(reindexIdeHelper, "$nickname", "$alias", 1))
+	s.reindexFiles(root, []string{helper})
+
+	cat := s.models.Lookup("App\\Models\\User")
+	if len(cat.ByExposed["alias"]) == 0 {
+		t.Error("new ide-helper property 'alias' missing")
+	}
+	if len(cat.ByExposed["nickname"]) != 0 {
+		t.Error("removed ide-helper property 'nickname' still present")
 	}
 }
 

@@ -36,6 +36,9 @@ const (
 	// Scope: a scopeXxx() query-scope method. Not an attribute — routed into
 	// ModelCatalog.Scopes, never into ByExposed.
 	Scope
+	// MigrationColumn: a column of the model's table, declared in a
+	// migration. Only present in Lookup's merged view (see WithSchema).
+	MigrationColumn
 )
 
 // AttributeSource indicates whether an entry came from real source code or
@@ -46,7 +49,14 @@ type AttributeSource int
 const (
 	SourceAST       AttributeSource = iota // parsed from app source code
 	SourceIdeHelper                        // parsed from _ide_helper_models.php stub
+	SourceMigration                        // a column from database/migrations; never renamed
 )
+
+// ColumnSource supplies the database columns of a table, keyed by column
+// name. migrations.Schema implements it.
+type ColumnSource interface {
+	Columns(table string) map[string]phputil.Location
+}
 
 // ModelAttribute is a single entry in a model's attribute catalog.
 type ModelAttribute struct {
@@ -74,6 +84,9 @@ type ModelCatalog struct {
 	Path       string        // absolute path of the file that defines this class
 	Extends    phputil.FQN   // direct parent FQN (for inheritance-chain walking)
 	UsesTraits []phputil.FQN // resolved FQNs of traits used in the class/trait body
+	// Table is the literal value of the class's own `$table` property, or ""
+	// when it does not declare one.
+	Table string
 
 	// ByExposed maps the snake_case attribute name to all known entries.
 	// Multiple entries exist when the same name appears in both an accessor
@@ -86,11 +99,30 @@ type ModelCatalog struct {
 	Scopes map[string]phputil.Location
 }
 
+// Clone returns a deep copy of c whose maps and slices can be modified
+// without affecting c (or readers holding c).
+func (c *ModelCatalog) Clone() *ModelCatalog {
+	out := *c
+	out.UsesTraits = append([]phputil.FQN(nil), c.UsesTraits...)
+	out.ByExposed = make(map[string][]ModelAttribute, len(c.ByExposed))
+	for name, attrs := range c.ByExposed {
+		out.ByExposed[name] = append([]ModelAttribute(nil), attrs...)
+	}
+	if c.Scopes != nil {
+		out.Scopes = make(map[string]phputil.Location, len(c.Scopes))
+		for name, loc := range c.Scopes {
+			out.Scopes[name] = loc
+		}
+	}
+	return &out
+}
+
 // ModelIndex is the full Eloquent symbol table for a project.
 type ModelIndex struct {
 	byFQN  map[phputil.FQN]*ModelCatalog
 	traits map[phputil.FQN]*ModelCatalog // trait FQN → its attribute catalog
 	syms   *symbolTable                  // retained for incremental per-file reindex
+	schema ColumnSource                  // nil = no migration columns
 
 	// merged memoizes inheritance/trait-merged catalog views per index
 	// generation (indexes are immutable once published, so views never go
@@ -135,8 +167,8 @@ func (idx *ModelIndex) Lookup(fqn phputil.FQN) *ModelCatalog {
 	if cat == nil {
 		return nil
 	}
-	if idx.byFQN[cat.Extends] == nil && !idx.anyIndexedTrait(cat.UsesTraits) {
-		return cat // no indexed ancestor or trait — nothing to merge
+	if idx.schema == nil && idx.byFQN[cat.Extends] == nil && !idx.anyIndexedTrait(cat.UsesTraits) {
+		return cat // no indexed ancestor, trait, or column — nothing to merge
 	}
 	return idx.mergedView(fqn, cat)
 }
@@ -218,13 +250,58 @@ func (idx *ModelIndex) mergedView(fqn phputil.FQN, cat *ModelCatalog) *ModelCata
 		visitedClasses[c.Class] = true
 		appendAttrs(c)
 		addTraits(c.UsesTraits)
+		if view.Table == "" {
+			view.Table = c.Table // nearest declared $table wins
+		}
 	}
+	if view.Table == "" {
+		view.Table = phputil.TableName(cat.Class)
+	}
+	idx.appendColumns(view)
 
 	if idx.merged == nil {
 		idx.merged = make(map[phputil.FQN]*ModelCatalog)
 	}
 	idx.merged[fqn] = view
 	return view
+}
+
+// appendColumns adds the migration columns of view's table as the
+// lowest-precedence entries, after every declared and inherited attribute.
+func (idx *ModelIndex) appendColumns(view *ModelCatalog) {
+	if idx.schema == nil {
+		return
+	}
+	for name, loc := range idx.schema.Columns(view.Table) {
+		view.ByExposed[name] = append(view.ByExposed[name], ModelAttribute{
+			ExposedName: name,
+			Kind:        MigrationColumn,
+			Source:      SourceMigration,
+			Location:    loc,
+		})
+	}
+}
+
+// WithSchema returns a new index whose Lookup views include the columns
+// schema reports for each model's table. The receiver is not modified, so
+// this is safe on an index already visible to concurrent readers. Catalog
+// maps are shared with the receiver: finish every Add/AddTrait (including the
+// ide-helper merge) before calling it.
+func (idx *ModelIndex) WithSchema(schema ColumnSource) *ModelIndex {
+	c := idx.shallowCopy()
+	c.schema = schema
+	return c
+}
+
+// shallowCopy shares the catalog maps and attachments but gets its own
+// merged-view memo, since attachments change what Lookup returns.
+func (idx *ModelIndex) shallowCopy() *ModelIndex {
+	return &ModelIndex{
+		byFQN:  idx.byFQN,
+		traits: idx.traits,
+		syms:   idx.syms,
+		schema: idx.schema,
+	}
 }
 
 // Syms returns the retained symbol table, or nil if this index was not built

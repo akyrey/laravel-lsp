@@ -193,3 +193,30 @@ func CastsMethodItemNamed(methodNode *ts.Node, src []byte, name string) *ts.Node
 func stringValue(n *ts.Node, src []byte) string {
 	return phpwalk.StringValue(n, src)
 }
+
+// extractTableName returns the string value of the class's `$table`
+// property, or "" when absent or not a plain string literal.
+func extractTableName(classNode *ts.Node, src []byte) string {
+	bodyNode := classNode.ChildByFieldName("body")
+	if bodyNode == nil {
+		return ""
+	}
+	for i := uint(0); i < bodyNode.ChildCount(); i++ {
+		propDecl := bodyNode.Child(i)
+		if propDecl.Kind() != "property_declaration" {
+			continue
+		}
+		for j := uint(0); j < propDecl.ChildCount(); j++ {
+			elem := propDecl.Child(j)
+			if elem.Kind() != "property_element" {
+				continue
+			}
+			nameNode := elem.ChildByFieldName("name")
+			if nameNode == nil || phpnode.NodeText(nameNode, src) != "$table" {
+				continue
+			}
+			return phpwalk.StringValue(elem.ChildByFieldName("default_value"), src)
+		}
+	}
+	return ""
+}

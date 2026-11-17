@@ -18,6 +18,7 @@ import (
 	"github.com/akyrey/laravel-lsp/internal/indexer/container"
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
 	"github.com/akyrey/laravel-lsp/internal/indexer/idehelper"
+	"github.com/akyrey/laravel-lsp/internal/indexer/migrations"
 	"github.com/akyrey/laravel-lsp/internal/indexer/strindex"
 )
 
@@ -32,6 +33,10 @@ type Config struct {
 	// ReferenceDirs are the directories walked when searching for references
 	// and rename sites. Defaults to ["app", "routes"].
 	ReferenceDirs []string `json:"referenceDirs"`
+
+	// MigrationDirs are the directories whose migrations supply model columns.
+	// Defaults to ["database/migrations"].
+	MigrationDirs []string `json:"migrationDirs"`
 
 	// Diagnostics tunes the unknown-property diagnostics.
 	Diagnostics DiagnosticsConfig `json:"diagnostics"`
@@ -77,6 +82,7 @@ func defaultConfig() Config {
 	return Config{
 		ScanDirs:      []string{"app"},
 		ReferenceDirs: []string{"app", "routes"},
+		MigrationDirs: migrations.DefaultDirs,
 	}
 }
 
@@ -93,6 +99,7 @@ func parseConfig(opts any) (Config, error) {
 	var raw struct {
 		ScanDirs      []string          `json:"scanDirs"`
 		ReferenceDirs []string          `json:"referenceDirs"`
+		MigrationDirs []string          `json:"migrationDirs"`
 		Diagnostics   DiagnosticsConfig `json:"diagnostics"`
 	}
 	data, err := json.Marshal(opts)
@@ -106,6 +113,7 @@ func parseConfig(opts any) (Config, error) {
 	cfg := Config{
 		ScanDirs:      raw.ScanDirs,
 		ReferenceDirs: raw.ReferenceDirs,
+		MigrationDirs: raw.MigrationDirs,
 		Diagnostics:   raw.Diagnostics,
 	}
 	if len(cfg.ScanDirs) == 0 {
@@ -114,6 +122,9 @@ func parseConfig(opts any) (Config, error) {
 	if len(cfg.ReferenceDirs) == 0 {
 		// Auto-derive: same dirs as scanning + routes.
 		cfg.ReferenceDirs = append(append([]string{}, cfg.ScanDirs...), "routes")
+	}
+	if len(cfg.MigrationDirs) == 0 {
+		cfg.MigrationDirs = migrations.DefaultDirs
 	}
 	return cfg, nil
 }
@@ -168,6 +179,7 @@ type Server struct {
 	bindings *container.BindingIndex
 	models   *eloquent.ModelIndex
 	strIndex *strindex.Index
+	schema   *migrations.Schema
 }
 
 // NewServer creates a Server ready to accept LSP requests.
@@ -338,9 +350,10 @@ func (s *Server) reindex(root string) {
 	var bindings *container.BindingIndex
 	var models *eloquent.ModelIndex
 	var strIdx *strindex.Index
+	var schema *migrations.Schema
 	var err1, err2 error
 
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		bindings, err1 = container.Walk(root, scanDirs, container.WithExternalParents(parents))
@@ -352,6 +365,10 @@ func (s *Server) reindex(root string) {
 	go func() {
 		defer wg.Done()
 		strIdx = strindex.Walk(root)
+	}()
+	go func() {
+		defer wg.Done()
+		schema = migrations.Walk(root, expandDirs(root, cfg.MigrationDirs))
 	}()
 	wg.Wait()
 
@@ -368,9 +385,12 @@ func (s *Server) reindex(root string) {
 		if err := idehelper.Merge(ideHelperPath, models); err != nil {
 			s.log.Errorf("laravel-lsp: idehelper merge: %v", err)
 		}
+		// Last: these share the catalog maps, so no Add may follow.
+		models = models.WithSchema(schema)
 	}
 
 	s.mu.Lock()
+	s.schema = schema
 	if err1 == nil {
 		s.bindings = bindings
 	}
@@ -381,9 +401,9 @@ func (s *Server) reindex(root string) {
 	s.mu.Unlock()
 	// One summary line makes "navigation returns nothing" diagnosable from
 	// the editor's LSP log: zero models usually means wrong scanDirs or a
-	// missing `composer install`.
-	s.log.Infof("laravel-lsp: indexing complete: %d models, %d bindings, %d composer PSR-4 prefixes",
-		countModels(models), countBindings(bindings), auto.Size())
+	// missing `composer install`, zero tables wrong migrationDirs.
+	s.log.Infof("laravel-lsp: indexing complete: %d models, %d bindings, %d migration tables, %d composer PSR-4 prefixes",
+		countModels(models), countBindings(bindings), schema.TableCount(), auto.Size())
 	if models != nil {
 		for _, c := range models.All() {
 			s.log.Debugf("laravel-lsp: indexed model %s (%s)", c.Class, c.Path)
@@ -421,6 +441,7 @@ func (s *Server) startWatcher(root string) {
 	// (config keys and blade views; routes are already in referenceDirs).
 	allPatterns := append(append([]string{}, cfg.ScanDirs...), cfg.ReferenceDirs...)
 	allPatterns = append(allPatterns, "config", filepath.Join("resources", "views"))
+	allPatterns = append(allPatterns, cfg.MigrationDirs...)
 	watchSet := expandDirs(root, allPatterns)
 
 	w, err := fsnotify.NewWatcher()
@@ -522,7 +543,7 @@ func (s *Server) watchLoop(w *fsnotify.Watcher, root string) {
 // (e.g., first startup before any index exists).
 func (s *Server) reindexFiles(root string, paths []string) {
 	s.mu.RLock()
-	bindings, models := s.bindings, s.models
+	bindings, models, schema, cfg := s.bindings, s.models, s.schema, s.cfg
 	s.mu.RUnlock()
 
 	if bindings == nil || models == nil || bindings.Syms() == nil || models.Syms() == nil ||
@@ -571,6 +592,16 @@ func (s *Server) reindexFiles(root string, paths []string) {
 		}
 	}
 
+	// A changed migration rebuilds the schema (a cheap walk) and re-attaches
+	// it. This must stay after the ide-helper merge: WithSchema shares maps.
+	migrationDirs := expandDirs(root, cfg.MigrationDirs)
+	if underAny(root, migrationDirs, paths) {
+		schema = migrations.Walk(root, migrationDirs)
+		newModels = newModels.WithSchema(schema)
+		s.mu.Lock()
+		s.schema = schema
+		s.mu.Unlock()
+	}
 	if newBindings != bindings || newModels != models {
 		s.mu.Lock()
 		s.bindings = newBindings
@@ -595,16 +626,32 @@ func countBindings(idx *container.BindingIndex) int {
 }
 
 // needsFullReindex reports whether a changed file affects every catalog
-// rather than one file's: Composer metadata (autoload and vendor ancestry
-// are loaded once per full reindex).
+// rather than one file's: the ide-helper stub (entries may have been
+// removed, which per-file merging cannot undo) or Composer metadata
+// (autoload and vendor ancestry are loaded once per full reindex).
 func needsFullReindex(root string, paths []string) bool {
 	full := map[string]bool{
+		filepath.Join(root, "_ide_helper_models.php"):               true,
 		filepath.Join(root, "composer.json"):                        true,
 		filepath.Join(root, "vendor", "composer", "installed.json"): true,
 	}
 	for _, p := range paths {
 		if full[p] {
 			return true
+		}
+	}
+	return false
+}
+
+// underAny reports whether any of paths lives under one of dirs (relative
+// to root).
+func underAny(root string, dirs, paths []string) bool {
+	for _, dir := range dirs {
+		prefix := filepath.Join(root, dir) + string(filepath.Separator)
+		for _, p := range paths {
+			if strings.HasPrefix(p, prefix) {
+				return true
+			}
 		}
 	}
 	return false

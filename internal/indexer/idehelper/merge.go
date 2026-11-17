@@ -84,7 +84,7 @@ func (v *mergeVisitor) VisitUseItem(alias, fqn string) {
 }
 
 func (v *mergeVisitor) VisitClass(n phpwalk.ClassInfo) {
-	fqn := v.fc.Resolve(n.NameText)
+	fqn := mixinTarget(v.fc.Resolve(n.NameText))
 	if fqn == "" {
 		return
 	}
@@ -95,46 +95,58 @@ func (v *mergeVisitor) VisitClass(n phpwalk.ClassInfo) {
 	}
 	props, methods := parseDocComment(doc)
 
-	// LookupDeclared, not Lookup: the entries appended below must land on
-	// the real catalog, not on an inheritance-merged copy.
+	// LookupDeclared, not Lookup: the entries must land on the real catalog,
+	// not on an inheritance-merged view.
 	cat := v.idx.LookupDeclared(fqn)
 	if cat == nil {
 		cat = &eloquent.ModelCatalog{
 			Class:     fqn,
 			ByExposed: make(map[string][]eloquent.ModelAttribute),
 		}
-		v.idx.Add(cat)
 	}
+	additions := v.newEntries(cat, props, methods)
+	if len(additions) == 0 {
+		return
+	}
+	// Copy-on-write: cat may already be published to concurrent readers
+	// (incremental reindex carries catalogs over), so never append into it.
+	updated := cat.Clone()
+	for _, a := range additions {
+		updated.ByExposed[a.ExposedName] = append(updated.ByExposed[a.ExposedName], a)
+	}
+	v.idx.Add(updated)
+}
 
+// newEntries returns the ide-helper attributes cat does not already have.
+// AST entries win: names declared in source are skipped.
+func (v *mergeVisitor) newEntries(cat *eloquent.ModelCatalog, props []ideProperty, methods []string) []eloquent.ModelAttribute {
+	var out []eloquent.ModelAttribute
 	for _, pe := range props {
 		if hasSourceAST(cat, pe.name) || hasIdeHelperEntry(cat, pe.name, eloquent.IdeHelperProperty) {
 			continue
 		}
-		attr := eloquent.ModelAttribute{
+		out = append(out, eloquent.ModelAttribute{
 			ExposedName: pe.name,
 			Kind:        eloquent.IdeHelperProperty,
 			Source:      eloquent.SourceIdeHelper,
 			// Zero Location: policy is "return nothing for ide-helper-only names".
-		}
-		// For class-typed properties, resolve the FQN so the chain resolver
-		// ($this->rel->attr) can follow the hop even without an AST relationship.
-		if relFQN := resolveClassType(pe.typeStr, v.fc); relFQN != "" {
-			attr.RelatedFQN = relFQN
-		}
-		cat.ByExposed[pe.name] = append(cat.ByExposed[pe.name], attr)
+			// A class-typed property lets the chain resolver follow
+			// $this->rel->attr even without an AST relationship.
+			RelatedFQN: resolveClassType(pe.typeStr, v.fc),
+		})
 	}
-
 	for _, name := range methods {
 		if hasSourceAST(cat, name) || hasIdeHelperEntry(cat, name, eloquent.IdeHelperMethod) {
 			continue
 		}
-		cat.ByExposed[name] = append(cat.ByExposed[name], eloquent.ModelAttribute{
+		out = append(out, eloquent.ModelAttribute{
 			ExposedName: name,
 			MethodName:  name,
 			Kind:        eloquent.IdeHelperMethod,
 			Source:      eloquent.SourceIdeHelper,
 		})
 	}
+	return out
 }
 
 // resolveClassType returns the FQN for a PHP type string if it looks like a
@@ -173,6 +185,24 @@ func hasIdeHelperEntry(cat *eloquent.ModelCatalog, name string, kind eloquent.At
 		}
 	}
 	return false
+}
+
+// mixinStubPrefix is the class-name prefix ide-helper uses in
+// --write-mixin mode: the stub for App\Models\User is App\Models\IdeHelperUser,
+// linked from the model by `@mixin IdeHelperUser`.
+const mixinStubPrefix = "IdeHelper"
+
+// mixinTarget maps a --write-mixin stub class to the model it describes.
+// Classes without the prefix (the default ide-helper layout, which reuses the
+// model's own name) are returned unchanged.
+func mixinTarget(fqn phputil.FQN) phputil.FQN {
+	s := string(fqn)
+	nsEnd := strings.LastIndex(s, "\\") + 1
+	short := s[nsEnd:]
+	if len(short) <= len(mixinStubPrefix) || !strings.HasPrefix(short, mixinStubPrefix) {
+		return fqn
+	}
+	return phputil.FQN(s[:nsEnd] + short[len(mixinStubPrefix):])
 }
 
 // extractDocComment returns the `/** ... */` block immediately preceding the

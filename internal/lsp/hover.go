@@ -98,9 +98,12 @@ func eloquentHoverMD(sym *refSymbol, models *eloquent.ModelIndex) string {
 		}
 		seen[a.Kind] = true
 		label := kindLabel[a.Kind]
-		if a.MethodName != "" {
+		switch {
+		case a.Kind == eloquent.MigrationColumn:
+			fmt.Fprintf(&sb, "- %s in `%s`\n", label, filepath.Base(a.Location.Path))
+		case a.MethodName != "":
 			fmt.Fprintf(&sb, "- %s via `%s()`\n", label, a.MethodName)
-		} else {
+		default:
 			fmt.Fprintf(&sb, "- %s\n", label)
 		}
 	}
