@@ -67,7 +67,17 @@ func findDefinition(
 		docs:     docs,
 	}
 	phpwalk.Walk(path, src, tree, dv)
-	return dv.locations
+	return append(dv.locations, stringRefLocations(tree, src, dv.fc, offset, strs, docs)...)
+}
+
+// stringRefLocations resolves the string-reference call under the cursor
+// (on its name or its first argument) to the key's declaration.
+func stringRefLocations(tree *ts.Tree, src []byte, fc *phputil.FileContext, offset int, strs *strindex.Index, docs *DocumentStore) []protocol.Location {
+	ref := stringRefAt(tree, src, fc, offset, strs)
+	if ref == nil || !ref.found || ref.loc.Zero() {
+		return nil
+	}
+	return []protocol.Location{toLSPLocation(ref.loc, docs)}
 }
 
 // defVisitor is a single-pass visitor that collects definition jump targets.
@@ -206,20 +216,6 @@ var stringRefLabel = map[string]string{
 	"view":   "view",
 	"route":  "route",
 	"env":    "env key",
-}
-
-func (v *defVisitor) VisitFunctionCall(n phpwalk.FunctionCallInfo) {
-	targets := stringRefTargets(v.strs, n.Name)
-	if targets == nil || len(n.Args) == 0 {
-		return
-	}
-	arg := n.Args[0]
-	if !phpwalk.IsStringLiteral(arg) || !cursorOnNode(v.offset, arg) {
-		return
-	}
-	if loc, ok := targets[phpwalk.StringValue(arg, n.Src)]; ok && !loc.Zero() {
-		v.locations = append(v.locations, toLSPLocation(loc, v.docs))
-	}
 }
 
 // — Location appenders —

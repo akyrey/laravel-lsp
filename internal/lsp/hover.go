@@ -7,6 +7,7 @@ import (
 
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
+	ts "github.com/tree-sitter/go-tree-sitter"
 
 	"github.com/akyrey/laravel-lsp/internal/indexer/container"
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
@@ -144,7 +145,7 @@ type stringRef struct {
 	found  bool
 }
 
-// identifyStringRef finds the string-helper call under offset, if any.
+// identifyStringRef finds the string-reference call under offset, if any.
 func identifyStringRef(src []byte, path string, offset int, strs *strindex.Index) *stringRef {
 	if strs == nil {
 		return nil
@@ -154,33 +155,26 @@ func identifyStringRef(src []byte, path string, offset int, strs *strindex.Index
 		return nil
 	}
 	defer tree.Close()
-
-	v := &stringRefFinder{offset: offset, strs: strs}
-	phpwalk.Walk(path, src, tree, v)
-	return v.ref
+	return stringRefAt(tree, src, fileContextOf(path, src, tree), offset, strs)
 }
 
-// stringRefFinder locates the config/view/route/env call whose first string
-// argument contains the cursor, and resolves its key against the index.
-type stringRefFinder struct {
-	phpwalk.NullVisitor
-	offset int
-	strs   *strindex.Index
-	ref    *stringRef
-}
-
-func (v *stringRefFinder) VisitFunctionCall(n phpwalk.FunctionCallInfo) {
-	targets := stringRefTargets(v.strs, n.Name)
-	if targets == nil || len(n.Args) == 0 {
-		return
+// stringRefAt resolves the string-reference call whose name or literal first
+// argument contains offset. The innermost match wins.
+func stringRefAt(tree *ts.Tree, src []byte, fc *phputil.FileContext, offset int, strs *strindex.Index) *stringRef {
+	if strs == nil {
+		return nil
 	}
-	arg := n.Args[0]
-	if !phpwalk.IsStringLiteral(arg) || !cursorOnNode(v.offset, arg) {
-		return
+	var ref *stringRef
+	for _, call := range findStringRefCalls(tree, src, fc) {
+		targets := stringRefTargets(strs, call.kind)
+		if targets == nil || !call.cursorOn(offset) || !phpwalk.IsStringLiteral(call.arg) {
+			continue
+		}
+		key := phpwalk.StringValue(call.arg, src)
+		loc, ok := targets[key]
+		ref = &stringRef{fnName: call.kind, key: key, loc: loc, found: ok}
 	}
-	key := phpwalk.StringValue(arg, n.Src)
-	loc, ok := targets[key]
-	v.ref = &stringRef{fnName: n.Name, key: key, loc: loc, found: ok}
+	return ref
 }
 
 // stringRefHoverMD renders hover text for a resolved string reference.

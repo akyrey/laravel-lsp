@@ -5,6 +5,7 @@ import (
 
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
+	ts "github.com/tree-sitter/go-tree-sitter"
 
 	"github.com/akyrey/laravel-lsp/internal/indexer/eloquent"
 	"github.com/akyrey/laravel-lsp/internal/indexer/strindex"
@@ -90,7 +91,7 @@ func collectDiagnostics(src []byte, path string, models *eloquent.ModelIndex, st
 		opts:   opts,
 	}
 	phpwalk.Walk(path, src, tree, dv)
-	return dv.diags
+	return append(dv.diags, stringRefDiagnostics(tree, src, dv.fc, strs, opts)...)
 }
 
 type diagVisitor struct {
@@ -136,34 +137,36 @@ func (v *diagVisitor) VisitPropertyFetch(n phpwalk.PropertyFetchInfo) {
 	})
 }
 
-// VisitFunctionCall warns on config()/view()/route()/env() calls whose
-// literal first argument is not found in the string-reference index.
-// Non-literal arguments (interpolated strings, variables) are unknowable
-// statically and are silently skipped, matching the dynamic-property-fetch
-// policy for Eloquent diagnostics above.
-func (v *diagVisitor) VisitFunctionCall(n phpwalk.FunctionCallInfo) {
-	targets := stringRefTargets(v.strs, n.Name)
-	if targets == nil || len(n.Args) == 0 {
-		return
+// stringRefDiagnostics warns on string-reference calls whose literal first
+// argument is not in the index. Non-literal arguments (interpolated strings,
+// variables) are unknowable statically and skipped, matching the
+// dynamic-property-fetch policy above; existence checks (View::exists,
+// Route::has, Config::has) probe for possibly-missing keys by design.
+func stringRefDiagnostics(tree *ts.Tree, src []byte, fc *phputil.FileContext, strs *strindex.Index, opts diagOptions) []protocol.Diagnostic {
+	if strs == nil {
+		return nil
 	}
-	arg := n.Args[0]
-	if !phpwalk.IsStringLiteral(arg) {
-		return
+	var out []protocol.Diagnostic
+	for _, call := range findStringRefCalls(tree, src, fc) {
+		targets := stringRefTargets(strs, call.kind)
+		if targets == nil || call.existenceCheck || !phpwalk.IsStringLiteral(call.arg) {
+			continue
+		}
+		key := phpwalk.StringValue(call.arg, src)
+		if key == "" {
+			continue
+		}
+		if _, known := targets[key]; known {
+			continue
+		}
+		sev := opts.severity
+		source := diagSource
+		out = append(out, protocol.Diagnostic{
+			Range:    toLSPRange(phpnode.FromNode(fc.Path, call.arg), src),
+			Severity: &sev,
+			Source:   &source,
+			Message:  fmt.Sprintf("unknown %s '%s'", stringRefLabel[call.kind], key),
+		})
 	}
-	key := phpwalk.StringValue(arg, n.Src)
-	if key == "" {
-		return
-	}
-	if _, known := targets[key]; known {
-		return
-	}
-
-	sev := v.opts.severity
-	src := diagSource
-	v.diags = append(v.diags, protocol.Diagnostic{
-		Range:    toLSPRange(phpnode.FromNode(v.path, arg), v.src),
-		Severity: &sev,
-		Source:   &src,
-		Message:  fmt.Sprintf("unknown %s '%s'", stringRefLabel[n.Name], key),
-	})
+	return out
 }

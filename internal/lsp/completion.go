@@ -53,16 +53,21 @@ func stringRefCompletions(src []byte, offset int, strs *strindex.Index) []protoc
 	}
 	defer tree.Close()
 
-	v := &stringRefVisitor{offset: offset, strs: strs}
-	phpwalk.Walk("", src, tree, v)
-	if v.targets == nil {
+	var fnName string
+	var targets map[string]phputil.Location
+	for _, call := range findStringRefCalls(tree, src, fileContextOf("", src, tree)) {
+		if t := stringRefTargets(strs, call.kind); t != nil && phpwalk.IsStringLiteral(call.arg) && cursorOnNode(offset, call.arg) {
+			fnName, targets = call.kind, t
+		}
+	}
+	if targets == nil {
 		return nil
 	}
 
 	kind := protocol.CompletionItemKindValue
-	items := make([]protocol.CompletionItem, 0, len(v.targets))
-	for name := range v.targets {
-		detail := v.fnName
+	items := make([]protocol.CompletionItem, 0, len(targets))
+	for name := range targets {
+		detail := fnName
 		items = append(items, protocol.CompletionItem{
 			Label:  name,
 			Kind:   &kind,
@@ -71,29 +76,6 @@ func stringRefCompletions(src []byte, offset int, strs *strindex.Index) []protoc
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
 	return items
-}
-
-// stringRefVisitor finds the innermost config/view/route call whose first
-// string argument contains the cursor.
-type stringRefVisitor struct {
-	phpwalk.NullVisitor
-	offset  int
-	strs    *strindex.Index
-	fnName  string
-	targets map[string]phputil.Location
-}
-
-func (v *stringRefVisitor) VisitFunctionCall(n phpwalk.FunctionCallInfo) {
-	targets := stringRefTargets(v.strs, n.Name)
-	if targets == nil || len(n.Args) == 0 {
-		return
-	}
-	arg := n.Args[0]
-	if !phpwalk.IsStringLiteral(arg) || !cursorOnNode(v.offset, arg) {
-		return
-	}
-	v.fnName = n.Name
-	v.targets = targets
 }
 
 // eloquentCompletions is the pure-function core of Completion. It resolves
