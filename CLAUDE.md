@@ -123,6 +123,8 @@ internal/
       merge.go                  # _ide_helper_models.php stub parser
     strindex/
       strindex.go               # config keys / views / route names / env keys index
+  logging/
+    logging.go                  # Verbosity() — stderr log level from LARAVEL_LSP_LOG_VERBOSITY (default: warnings)
   lsp/
     server.go                   # Server struct — owns all LSP state + handler methods
     definition.go               # textDocument/definition — container + Eloquent dispatch

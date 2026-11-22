@@ -131,6 +131,17 @@ This automatically sets `referenceDirs` to `["app", "Modules/*/app", "routes"]`.
 }
 ```
 
+## Logging
+
+The server logs to stderr, which editors record in their LSP log (Neovim records all of it at ERROR level). By default only warnings and errors are written. Set `LARAVEL_LSP_LOG_VERBOSITY` to see more while debugging:
+
+| Value | Logs |
+| ----- | ---- |
+| `-4` | nothing |
+| `-3` / `-2` | critical / errors |
+| `-1` | warnings and errors (default) |
+| `0` / `1` / `2` | notice / info / debug |
+
 ## Editor setup
 
 ### Neovim (minimal)
@@ -226,6 +237,8 @@ internal/
       walk.go               # Walk() + ReindexFile()
     idehelper/
       merge.go              # _ide_helper_models.php stub parser
+  logging/
+    logging.go              # stderr log verbosity (LARAVEL_LSP_LOG_VERBOSITY)
   lsp/
     server.go               # Server struct — owns all state and handler methods
     definition.go           # textDocument/definition

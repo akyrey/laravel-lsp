@@ -10,6 +10,7 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"github.com/tliron/glsp/server"
 
+	"github.com/akyrey/laravel-lsp/internal/logging"
 	"github.com/akyrey/laravel-lsp/internal/lsp"
 )
 
@@ -58,8 +59,9 @@ func main() {
 		}
 	}
 
-	// Default: run LSP server over stdio.
-	commonlog.Configure(1, nil)
+	// Default: run LSP server over stdio. Log to stderr, warnings and errors
+	// only unless LARAVEL_LSP_LOG_VERBOSITY says otherwise; see internal/logging.
+	commonlog.Configure(logging.Verbosity(os.Getenv), nil)
 	s := lsp.NewServer(commonlog.GetLogger(lsName), resolveVersion())
 	handler := buildHandler(s)
 	srv := server.NewServer(handler, lsName, false)
